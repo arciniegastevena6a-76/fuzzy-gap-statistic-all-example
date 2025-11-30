@@ -5,6 +5,7 @@ Generalized Basic Probability Assignment (GBPA) generation module
 """
 
 import numpy as np
+from itertools import combinations
 from typing import Dict, Tuple, Optional, List
 
 # Numerical tolerance constants
@@ -149,7 +150,6 @@ class GBPAGenerator:
             # Step 2: Generate pairwise multi-subset propositions (according to paper Figure 5)
             # For each pair of intersecting classes, generate a multi-subset proposition
             # using the minimum membership of the pair (lower ordinate point)
-            from itertools import combinations
             for pair in combinations(sorted_classes, 2):
                 cls_i, cls_j = pair
                 # Use the minimum membership of the two classes
@@ -503,16 +503,29 @@ def test_pairwise_multisubset_proposition():
     """
     generator = GBPAGenerator()
     
-    # Set up TFN models that produce memberships of 0.8, 0.5, 0.3 at x=2
+    # Calculate TFN max values that produce desired memberships at x=2
     # Using the formula: at x > mean, membership = (max-x)/(max-mean)
-    # For class 0: (max-2)/(max-1) = 0.8 -> max = 6
-    # For class 1: (max-2)/(max-1) = 0.5 -> max = 3
-    # For class 2: (max-2)/(max-1) = 0.3 -> max ≈ 2.43
+    # Solving for max: membership = (max-x)/(max-mean)
+    # -> membership * (max - mean) = max - x
+    # -> membership * max - membership * mean = max - x
+    # -> membership * max - max = membership * mean - x
+    # -> max * (membership - 1) = membership * mean - x
+    # -> max = (membership * mean - x) / (membership - 1)
+    # With mean=1 and x=2:
+    # -> max = (membership * 1 - 2) / (membership - 1) = (membership - 2) / (membership - 1)
+    
+    def calculate_tfn_max(target_membership, mean=1.0, x=2.0):
+        """Calculate TFN max value to achieve target membership at x > mean."""
+        return (target_membership * mean - x) / (target_membership - 1)
+    
+    target_memberships = [0.8, 0.5, 0.3]
+    tfn_max_values = [calculate_tfn_max(m) for m in target_memberships]
+    
     generator.known_classes = [0, 1, 2]
     generator.tfn_models = {
-        0: {0: (0.0, 1.0, 6.0)},    # At x=2, membership = 0.8
-        1: {0: (0.0, 1.0, 3.0)},    # At x=2, membership = 0.5
-        2: {0: (0.0, 1.0, 2.43)}    # At x=2, membership ≈ 0.3
+        0: {0: (0.0, 1.0, tfn_max_values[0])},   # At x=2, membership = 0.8
+        1: {0: (0.0, 1.0, tfn_max_values[1])},   # At x=2, membership = 0.5
+        2: {0: (0.0, 1.0, tfn_max_values[2])}    # At x=2, membership = 0.3
     }
     
     # Generate GBPA at attribute value 2.0 for feature index 0
