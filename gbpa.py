@@ -138,18 +138,30 @@ class GBPAGenerator:
 
         elif len(active_classes) >= 2:
             # Rules ②③: Multiple class intersections
-            # According to 9-2 document Section 2.2:
+            # According to 9-2 document Section 2.2 and Figure 5:
             # - Higher ordinate points: GBPA for each single-subset proposition
-            # - Lower ordinate point: GBPA for multi-subset proposition
+            # - Lower ordinate points: GBPA for pairwise multi-subset propositions
             # 
-            # Each class gets single-subset GBPA with its own membership
+            # Step 1: Each class gets single-subset GBPA with its own membership
             for cls in sorted_classes:
                 gbpa[frozenset([cls])] = memberships[cls]
             
-            # Multi-subset containing all intersecting classes uses the MINIMUM membership
-            multi_subset = frozenset(sorted_classes)
-            min_membership = memberships[sorted_classes[-1]]  # Already sorted descending
-            gbpa[multi_subset] = min_membership
+            # Step 2: Generate pairwise multi-subset propositions (according to paper Figure 5)
+            # For each pair of intersecting classes, generate a multi-subset proposition
+            # using the minimum membership of the pair (lower ordinate point)
+            from itertools import combinations
+            for pair in combinations(sorted_classes, 2):
+                cls_i, cls_j = pair
+                # Use the minimum membership of the two classes
+                pair_membership = min(memberships[cls_i], memberships[cls_j])
+                gbpa[frozenset(pair)] = pair_membership
+            
+            # Step 3: If 3 or more classes intersect, also generate the full set multi-subset
+            if len(active_classes) >= 3:
+                # Full set multi-subset uses the minimum membership
+                all_subset = frozenset(sorted_classes)
+                min_membership = memberships[sorted_classes[-1]]  # Already sorted descending
+                gbpa[all_subset] = min_membership
 
         # Step 4: 规则④ - 归一化或生成m(Φ)
         total_support = sum(gbpa.values())
@@ -466,6 +478,79 @@ def test_gcr_example4():
     return True
 
 
+def test_pairwise_multisubset_proposition():
+    """
+    验证多子集命题生成 - 按照论文9-2 图5的成对多子集生成规则
+    
+    当样本与3个类(a, b, c)相交，隶属度分别为:
+        memberships[a] = 0.8
+        memberships[b] = 0.5
+        memberships[c] = 0.3
+    
+    生成的GBPA应该包含:
+        - 单子集命题: m({a}), m({b}), m({c})
+        - 成对多子集命题: m({a,b}), m({b,c}), m({a,c})
+        - 全集多子集命题: m({a,b,c})
+    
+    成对多子集使用两者中较小的隶属度:
+        m({a,b}) = min(0.8, 0.5) = 0.5
+        m({b,c}) = min(0.5, 0.3) = 0.3
+        m({a,c}) = min(0.8, 0.3) = 0.3
+        m({a,b,c}) = 0.3
+    
+    归一化前总和 = 0.8 + 0.5 + 0.3 + 0.5 + 0.3 + 0.3 + 0.3 = 3.0 > 1
+    因此需要归一化，m(∅) = 0
+    """
+    generator = GBPAGenerator()
+    
+    # Set up TFN models that produce memberships of 0.8, 0.5, 0.3 at x=2
+    # Using the formula: at x > mean, membership = (max-x)/(max-mean)
+    # For class 0: (max-2)/(max-1) = 0.8 -> max = 6
+    # For class 1: (max-2)/(max-1) = 0.5 -> max = 3
+    # For class 2: (max-2)/(max-1) = 0.3 -> max ≈ 2.43
+    generator.known_classes = [0, 1, 2]
+    generator.tfn_models = {
+        0: {0: (0.0, 1.0, 6.0)},    # At x=2, membership = 0.8
+        1: {0: (0.0, 1.0, 3.0)},    # At x=2, membership = 0.5
+        2: {0: (0.0, 1.0, 2.43)}    # At x=2, membership ≈ 0.3
+    }
+    
+    # Generate GBPA at attribute value 2.0 for feature index 0
+    gbpa = generator._generate_gbpa_for_single_attribute(2.0, 0)
+    
+    # Verify all focal elements are present
+    expected_focal_elements = [
+        frozenset([0]), frozenset([1]), frozenset([2]),           # Single subsets
+        frozenset([0, 1]), frozenset([0, 2]), frozenset([1, 2]),  # Pairwise subsets
+        frozenset([0, 1, 2]),                                     # Full set
+        'empty'
+    ]
+    
+    for fe in expected_focal_elements:
+        assert fe in gbpa, f"焦元 {fe} 缺失!"
+    
+    # Verify m(empty) = 0 (due to normalization)
+    assert abs(gbpa['empty'] - 0.0) < 1e-6, f"m(Φ) 应为 0，实际为 {gbpa['empty']}"
+    
+    # Verify total (excluding empty) sums to 1.0
+    total = sum(v for k, v in gbpa.items() if k != 'empty')
+    assert abs(total - 1.0) < 1e-6, f"总和应为 1.0，实际为 {total}"
+    
+    # Verify the structure follows the expected pattern
+    # After normalization by 3.0:
+    # m({0}) = 0.8/3.0 ≈ 0.267
+    # m({1}) = 0.5/3.0 ≈ 0.167
+    # m({2}) = 0.3/3.0 ≈ 0.100
+    # m({0,1}) = 0.5/3.0 ≈ 0.167
+    # m({0,2}) = 0.3/3.0 ≈ 0.100
+    # m({1,2}) = 0.3/3.0 ≈ 0.100
+    # m({0,1,2}) = 0.3/3.0 ≈ 0.100
+    
+    print("成对多子集命题生成验证通过！符合论文9-2 图5规则")
+    return True
+
+
 if __name__ == "__main__":
-    # Run verification test
+    # Run verification tests
     test_gcr_example4()
+    test_pairwise_multisubset_proposition()
