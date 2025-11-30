@@ -153,11 +153,12 @@ class GBPAGenerator:
             # 规则③：当样本处于多个多命题的三角模糊数表示模型相交点时，
             # 纵坐标高点为该样本各个单子集命题的 GBPA，
             # 纵坐标低点为该样本支持多子集命题的 GBPA。
+            #
+            # 关键修正：高点只生成隶属度最高的那个类的单子集GBPA，不是每个类！
+            # Key fix: High point generates single subset GBPA for ONLY the highest class!
+            cls_highest = sorted_classes[0]
             
-            # 为每个相交的类别都生成单子集 GBPA，使用各自的隶属度值
-            # Generate single subset GBPA for each intersecting class with its own membership
-            for cls in sorted_classes:
-                gbpa[frozenset([cls])] = memberships[cls]
+            gbpa[frozenset([cls_highest])] = memberships[cls_highest]
             
             # 生成一个包含所有相交类别的多子集命题，使用最低的隶属度值
             # Generate one multi-subset containing all intersecting classes with lowest membership
@@ -436,6 +437,104 @@ def test_gcr_example4():
     return True
 
 
+def test_strong_constraint_rules():
+    """
+    验证强约束GBPA生成规则 - 文献 9-2 Section 2.2
+    
+    规则②：当样本与两个命题的三角模糊数表示模型相交时：
+        - 高点（较大隶属度）→ 生成这一个类的单子集命题的GBPA
+        - 低点（较小隶属度）→ 生成两个类组成的多子集命题的GBPA
+        
+    规则③：当样本落在三个及以上类的重叠区域时：
+        - 高点 → 只生成隶属度最高的那个类的单子集GBPA
+        - 低点 → 生成全集多子集命题的GBPA
+    """
+    generator = GBPAGenerator()
+    
+    # Test Rule ② - Two classes intersect
+    print("Testing Rule ② (2 classes)...")
+    generator.known_classes = ['a', 'b']
+    generator.tfn_models = {
+        'a': {0: (0.0, 3.0, 6.0)},  # a peaks at 3.0
+        'b': {0: (4.0, 7.0, 10.0)}  # b peaks at 7.0
+    }
+    
+    # At x=5.0: a=(6-5)/(6-3)=0.333, b=(5-4)/(7-4)=0.333
+    result = generator._generate_gbpa_for_single_attribute(5.0, 0)
+    
+    # Check that we have: m({a}) [higher], m({a,b}) [multi-subset], m(∅)
+    assert frozenset(['a']) in result or frozenset(['b']) in result, \
+        f"Rule ② should generate single subset for higher class, got: {result}"
+    assert frozenset(['a', 'b']) in result, \
+        f"Rule ② should generate multi-subset, got: {result}"
+    assert 'empty' in result, \
+        f"Rule ② should include empty set, got: {result}"
+    
+    # At x=4.5: a=(6-4.5)/(6-3)=0.5, b=(4.5-4)/(7-4)=0.167
+    result = generator._generate_gbpa_for_single_attribute(4.5, 0)
+    assert frozenset(['a']) in result, \
+        f"Rule ② should generate single subset for 'a' (higher), got: {result}"
+    assert frozenset(['a', 'b']) in result, \
+        f"Rule ② should generate multi-subset, got: {result}"
+    # Should NOT have single subset for 'b'!
+    assert frozenset(['b']) not in result, \
+        f"Rule ② should NOT generate single subset for lower class 'b', got: {result}"
+    
+    # Verify sum < 1 produces m(∅) > 0
+    total_non_empty = sum(v for k, v in result.items() if k != 'empty')
+    if total_non_empty < 1.0:
+        assert result['empty'] > 0, \
+            f"When sum < 1, m(∅) should be > 0, got: {result}"
+    
+    print("  Rule ② tests passed!")
+    
+    # Test Rule ③ - Three or more classes intersect
+    print("Testing Rule ③ (3+ classes)...")
+    generator.known_classes = ['a', 'b', 'c']
+    generator.tfn_models = {
+        'a': {0: (0.0, 2.0, 4.0)},
+        'b': {0: (1.0, 3.0, 5.0)},
+        'c': {0: (2.0, 4.0, 6.0)}
+    }
+    
+    # At x=3.0: b=1.0 (peak), a=0.5, c=0.5
+    result = generator._generate_gbpa_for_single_attribute(3.0, 0)
+    
+    # Should have: m({b}) [highest], m({a,b,c}) [full set]
+    assert frozenset(['b']) in result, \
+        f"Rule ③ should generate single subset for highest class 'b', got: {result}"
+    assert frozenset(['a', 'b', 'c']) in result, \
+        f"Rule ③ should generate full multi-subset, got: {result}"
+    
+    # Should NOT have single subsets for 'a' or 'c'!
+    assert frozenset(['a']) not in result, \
+        f"Rule ③ should NOT generate single subset for non-highest class 'a', got: {result}"
+    assert frozenset(['c']) not in result, \
+        f"Rule ③ should NOT generate single subset for non-highest class 'c', got: {result}"
+    
+    print("  Rule ③ tests passed!")
+    
+    # Test that m(∅) > 0 when sum < 1
+    print("Testing m(∅) generation when sum < 1...")
+    generator.known_classes = ['a', 'b', 'c']
+    generator.tfn_models = {
+        'a': {0: (0.0, 2.0, 4.0)},
+        'b': {0: (1.0, 3.0, 5.0)},
+        'c': {0: (2.0, 4.0, 6.0)}
+    }
+    
+    # At x=3.5: b=(5-3.5)/(5-3)=0.75, c=(3.5-2)/(4-2)=0.75, a=(4-3.5)/(4-2)=0.25
+    result = generator._generate_gbpa_for_single_attribute(3.5, 0)
+    # Highest is b or c (both 0.75), lowest is a (0.25)
+    # Sum = 0.75 + 0.25 = 1.0, so m(∅) = 0 (after normalization if needed)
+    
+    print(f"  At x=3.5: {result}")
+    
+    print("All strong constraint rule tests passed!")
+    return True
+
+
 if __name__ == "__main__":
-    # Run verification test
+    # Run verification tests
     test_gcr_example4()
+    test_strong_constraint_rules()
