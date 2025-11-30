@@ -130,39 +130,26 @@ class GBPAGenerator:
                               key=lambda c: memberships[c],
                               reverse=True)
 
-        # 规则①②：生成单子集和多子集命题
+        # 规则①②③：生成单子集和多子集命题
         if len(active_classes) == 1:
-            # 只与一个类别相交 - 规则①
+            # Rule ①: Only one class intersection
             cls = active_classes[0]
             gbpa[frozenset([cls])] = memberships[cls]
 
-        elif len(sorted_classes) == 2:
-            # 与两个类别相交 - 规则②
-            cls1, cls2 = sorted_classes[0], sorted_classes[1]
-
-            # 高点 → 单子集
-            gbpa[frozenset([cls1])] = memberships[cls1]
-
-            # 低点 → 二元多子集
-            multi_subset = frozenset([cls1, cls2])
-            gbpa[multi_subset] = memberships[cls2]
-
-        elif len(sorted_classes) >= 3:
-            # 与三个或更多类别相交 - 规则③
+        elif len(active_classes) >= 2:
+            # Rules ②③: Multiple class intersections
             # According to 9-2 document Section 2.2:
-            # 规则③：当样本处于多个多命题的三角模糊数表示模型相交点时，
-            # 纵坐标高点为该样本各个单子集命题的 GBPA，
-            # 纵坐标低点为该样本支持多子集命题的 GBPA。
-            
-            # 为每个相交的类别都生成单子集 GBPA，使用各自的隶属度值
-            # Generate single subset GBPA for each intersecting class with its own membership
+            # - Higher ordinate points: GBPA for each single-subset proposition
+            # - Lower ordinate point: GBPA for multi-subset proposition
+            # 
+            # Each class gets single-subset GBPA with its own membership
             for cls in sorted_classes:
                 gbpa[frozenset([cls])] = memberships[cls]
             
-            # 生成一个包含所有相交类别的多子集命题，使用最低的隶属度值
-            # Generate one multi-subset containing all intersecting classes with lowest membership
-            all_classes_subset = frozenset(sorted_classes)
-            gbpa[all_classes_subset] = memberships[sorted_classes[-1]]  # sorted_classes 已按降序排列
+            # Multi-subset containing all intersecting classes uses the MINIMUM membership
+            multi_subset = frozenset(sorted_classes)
+            min_membership = memberships[sorted_classes[-1]]  # Already sorted descending
+            gbpa[multi_subset] = min_membership
 
         # Step 4: 规则④ - 归一化或生成m(Φ)
         total_support = sum(gbpa.values())
@@ -342,6 +329,49 @@ class GBPAGenerator:
         论文 Eq. (20)
         """
         return np.mean(m_empty_array)
+
+    def calculate_mean_empty_mass_by_paper(self, data: np.ndarray) -> Tuple[float, List[float]]:
+        """
+        Calculate m̄(∅) exactly as shown in Paper Table 2
+        
+        According to Paper Eq. (20):
+        m̄(∅) = (1/t) × Σᵢ₌₁ᵗ m(∅)
+        where t is the number of attributes
+        
+        This method:
+        1. For each attribute j, calculate the average m(∅) across all test samples
+        2. Then average these attribute-level means to get the final m̄(∅)
+        
+        Args:
+            data: Test data (n_samples, n_features)
+            
+        Returns:
+            m_empty_mean: Final m̄(∅) value
+            attribute_means: List of per-attribute m(∅) means
+        """
+        n_samples = data.shape[0]
+        n_features = data.shape[1]
+        
+        # Store m(∅) for each attribute across all samples
+        attribute_m_empty = {j: [] for j in range(n_features)}
+        
+        for i in range(n_samples):
+            sample = data[i]
+            for j in range(n_features):
+                attr_gbpa = self._generate_gbpa_for_single_attribute(sample[j], j)
+                m_empty = attr_gbpa.get('empty', 0.0)
+                attribute_m_empty[j].append(m_empty)
+        
+        # Calculate mean for each attribute (like Table 2 rows)
+        attribute_means = []
+        for j in range(n_features):
+            attr_mean = np.mean(attribute_m_empty[j])
+            attribute_means.append(attr_mean)
+        
+        # Final m̄(∅) is mean of attribute means
+        m_empty_mean = np.mean(attribute_means)
+        
+        return m_empty_mean, attribute_means
 
     def analyze_empty_mass_statistics(self, m_empty_combined_array: np.ndarray,
                                      m_empty_mean_attribute_array: np.ndarray,
